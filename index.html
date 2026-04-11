@@ -1,0 +1,644 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Baie 1 — Moulin-Liron Paris</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap');
+* { margin:0; padding:0; box-sizing:border-box; }
+html, body { width:100%; height:100%; overflow:hidden; background:#0c0c0c; }
+
+/* ── TOP BAR ── */
+#topbar {
+  position:fixed; top:0; left:0; right:0; height:44px;
+  background:rgba(8,8,8,0.97);
+  border-bottom:1px solid #1e1e1e;
+  display:flex; align-items:center; justify-content:space-between;
+  padding:0 20px; z-index:100;
+  backdrop-filter:blur(10px);
+}
+#topbar-title {
+  font-family:'Share Tech Mono',monospace;
+  font-size:11px; letter-spacing:4px; color:#3a3a3a;
+}
+#topbar-btns { display:flex; gap:5px; }
+.tbtn {
+  font-family:'Share Tech Mono',monospace;
+  font-size:9px; letter-spacing:1px;
+  padding:5px 13px; cursor:pointer; border-radius:2px;
+  background:#111; border:1px solid #252525; color:#3a3a3a;
+  transition:all 0.2s; user-select:none;
+}
+.tbtn:hover { border-color:#484848; color:#888; background:#161616; }
+.tbtn.active { border-color:#555; color:#bbb; background:#1a1a1a; }
+
+/* ── CANVAS ── */
+#c { display:block; position:fixed; top:44px; left:0; }
+
+/* ── LOADING ── */
+#loader {
+  position:fixed; inset:0; background:#0c0c0c;
+  display:flex; flex-direction:column; align-items:center; justify-content:center;
+  gap:20px; z-index:200;
+}
+#loader-label {
+  font-family:'Share Tech Mono',monospace;
+  font-size:10px; letter-spacing:5px; color:#2a2a2a;
+}
+#loader-bar-bg {
+  width:180px; height:1px; background:#1a1a1a;
+}
+#loader-bar {
+  height:1px; background:#444; width:0%; transition:width 0.25s;
+}
+#loader-pct {
+  font-family:'Share Tech Mono',monospace;
+  font-size:9px; color:#222; letter-spacing:2px;
+}
+
+/* ── BOTTOM HUD ── */
+#hud {
+  position:fixed; bottom:16px; left:50%; transform:translateX(-50%);
+  font-family:'Share Tech Mono',monospace;
+  font-size:8px; letter-spacing:3px; color:#1e1e1e;
+  pointer-events:none;
+  transition:opacity 1s;
+}
+
+/* ── U LABEL OVERLAY (visible front view only) ── */
+#u-overlay {
+  position:fixed; top:44px; left:0; bottom:0;
+  pointer-events:none; z-index:50;
+  overflow:hidden;
+}
+
+/* ── TOOLTIP ── */
+#tooltip {
+  position:fixed; bottom:50px; left:50%; transform:translateX(-50%);
+  font-family:'Share Tech Mono',monospace;
+  font-size:9px; letter-spacing:2px; color:#555;
+  background:rgba(8,8,8,0.85);
+  border:1px solid #1e1e1e; padding:6px 16px; border-radius:2px;
+  pointer-events:none; opacity:0; transition:opacity 0.3s;
+}
+</style>
+</head>
+<body>
+
+<div id="loader">
+  <div id="loader-label">CHARGEMENT · BAIE 1</div>
+  <div id="loader-bar-bg"><div id="loader-bar"></div></div>
+  <div id="loader-pct">0%</div>
+</div>
+
+<div id="topbar">
+  <div id="topbar-title">BAIE 1 — ARMOIRE PRINCIPALE · 42U · MOULIN-LIRON · PARIS</div>
+  <div id="topbar-btns">
+    <button class="tbtn active" id="bFront" onclick="goView('front')">AVANT</button>
+    <button class="tbtn" id="bLeft"  onclick="goView('left')">GAUCHE</button>
+    <button class="tbtn" id="bRight" onclick="goView('right')">DROITE</button>
+    <button class="tbtn" id="bBack"  onclick="goView('back')">ARRIÈRE</button>
+    <button class="tbtn" id="bReset" onclick="goView('reset')">⟳ RESET</button>
+  </div>
+</div>
+
+<canvas id="c"></canvas>
+<div id="hud">GLISSER POUR TOURNER · MOLETTE POUR ZOOMER</div>
+<div id="tooltip"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+
+// ═══════════════════════════════════════════════════════
+// RACK DEVICE DEFINITIONS
+// Each device maps to images/equipementN.png
+// u_start: 1-based from top of rack
+// u_height: number of U slots it occupies
+// ═══════════════════════════════════════════════════════
+const RACK_UNITS = 42;
+
+const DEVICES = [
+  // u_start, u_height, image_file, name, led_colors
+  { u: 3,  h: 1, img: 'equipement1.png',  name: 'Panneau Fibre SYSTIMAX 600 G2',   leds: ['#4466aa'] },
+  { u: 4,  h: 1, img: 'equipement2.png',  name: 'Patch Panel RJ45 S1 · 001-024',   leds: [] },
+  { u: 5,  h: 1, img: 'equipement3.png',  name: 'Patch Panel RJ45 S1 · 025-048',   leds: [] },
+  { u: 6,  h: 1, img: 'equipement4.png',  name: 'Patch Panel RJ45 S2 · 001-024',   leds: [] },
+  { u: 7,  h: 2, img: 'equipement5.png',  name: 'WatchGuard Firebox M390',          leds: ['#ff2200','#22aa44','#ffaa00'] },
+  { u: 9,  h: 1, img: 'equipement6.png',  name: 'Patch Panel RJ45 S2 · 025-048',   leds: [] },
+  { u: 12, h: 2, img: 'equipement7.png',  name: 'Aruba 6100 · Switch #1',           leds: ['#00cc44','#00cc44','#00cc44'] },
+  { u: 14, h: 2, img: 'equipement8.png',  name: 'Aruba 6100 · Switch #2',           leds: ['#00cc44','#00cc44','#00cc44'] },
+  { u: 16, h: 2, img: 'equipement9.png',  name: 'UniFi Network Console',            leds: ['#2266ff','#00aa44'] },
+  { u: 23, h: 2, img: 'equipement10.png', name: 'Eaton SP 650 · UPS #1',            leds: ['#2255cc','#00aa44'] },
+  { u: 25, h: 2, img: 'equipement11.png', name: 'Eaton SP 650 · UPS #2',            leds: ['#2255cc','#00aa44'] },
+  { u: 40, h: 1, img: 'equipement12.png', name: 'PDU · Multiprise Rack',            leds: ['#00aa44'] },
+];
+
+// ═══════════════════════════════════════════════════════
+// PHYSICAL DIMENSIONS (meters)
+// ═══════════════════════════════════════════════════════
+const U_H   = 0.04445;           // 1U = 44.45mm
+const R_W   = 0.482;             // 19" usable width
+const R_D   = 0.600;             // depth 600mm
+const EAR_W = 0.026;             // mounting ear width
+const TOT_W = R_W + EAR_W * 2;  // total rack width
+const R_H   = RACK_UNITS * U_H; // full rack height ~1.87m
+
+// ═══════════════════════════════════════════════════════
+// SCENE
+// ═══════════════════════════════════════════════════════
+const canvas = document.getElementById('c');
+const W = () => window.innerWidth;
+const H = () => window.innerHeight - 44;
+
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.0;
+renderer.outputEncoding = THREE.sRGBEncoding;
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0c0c0c);
+scene.fog = new THREE.FogExp2(0x0c0c0c, 0.18);
+
+const camera = new THREE.PerspectiveCamera(36, W()/H(), 0.01, 40);
+
+function resize() {
+  renderer.setSize(W(), H());
+  camera.aspect = W()/H();
+  camera.updateProjectionMatrix();
+}
+resize();
+window.addEventListener('resize', resize);
+
+// ═══════════════════════════════════════════════════════
+// LIGHTS
+// ═══════════════════════════════════════════════════════
+scene.add(new THREE.AmbientLight(0xffffff, 0.18));
+
+const sunLight = new THREE.DirectionalLight(0xfff5e8, 1.4);
+sunLight.position.set(1, 3, 5);
+sunLight.castShadow = true;
+sunLight.shadow.mapSize.set(2048, 2048);
+sunLight.shadow.camera.near = 0.1;
+sunLight.shadow.camera.far = 20;
+sunLight.shadow.camera.left = -2;
+sunLight.shadow.camera.right = 2;
+sunLight.shadow.camera.top = 2;
+sunLight.shadow.camera.bottom = -2;
+sunLight.shadow.bias = -0.001;
+scene.add(sunLight);
+
+const fillL = new THREE.DirectionalLight(0xd0e8ff, 0.35);
+fillL.position.set(-3, 1, 2);
+scene.add(fillL);
+
+const rimL = new THREE.DirectionalLight(0xffffff, 0.2);
+rimL.position.set(0, -2, -3);
+scene.add(rimL);
+
+// Subtle floor bounce
+const bounceL = new THREE.DirectionalLight(0x333333, 0.3);
+bounceL.position.set(0, -5, 2);
+scene.add(bounceL);
+
+// ═══════════════════════════════════════════════════════
+// TEXTURE LOADER
+// ═══════════════════════════════════════════════════════
+const texLoader = new THREE.TextureLoader();
+const texCache = {};
+
+function loadTex(url) {
+  if (texCache[url]) return texCache[url];
+  const t = texLoader.load(url);
+  t.encoding = THREE.sRGBEncoding;
+  texCache[url] = t;
+  return t;
+}
+
+// ═══════════════════════════════════════════════════════
+// MATERIALS
+// ═══════════════════════════════════════════════════════
+function metalMat(hex, rough=0.65, metal=0.75) {
+  return new THREE.MeshStandardMaterial({ color:hex, roughness:rough, metalness:metal });
+}
+
+const MAT = {
+  shell:    metalMat(0x1a1a1a, 0.70, 0.82),
+  ear:      metalMat(0x181818, 0.68, 0.78),
+  side:     metalMat(0x141414, 0.80, 0.70),
+  top:      metalMat(0x161616, 0.75, 0.65),
+  back:     metalMat(0x0e0e0e, 0.90, 0.40),
+  empty:    metalMat(0x141414, 0.90, 0.10),
+  screwMat: metalMat(0x282828, 0.35, 0.90),
+  floor:    new THREE.MeshStandardMaterial({ color:0x080808, roughness:1.0, metalness:0 }),
+};
+
+// ═══════════════════════════════════════════════════════
+// GEOMETRY HELPERS
+// ═══════════════════════════════════════════════════════
+function addBox(parent, mat, w, h, d, x=0, y=0, z=0) {
+  const m = new THREE.Mesh(new THREE.BoxGeometry(w,h,d), mat);
+  m.position.set(x,y,z);
+  m.castShadow = true;
+  m.receiveShadow = true;
+  parent.add(m);
+  return m;
+}
+
+function addScrew(parent, x, y, z) {
+  const geo = new THREE.CylinderGeometry(0.0025, 0.0025, 0.003, 8);
+  const m = new THREE.Mesh(geo, MAT.screwMat);
+  m.position.set(x, y, z);
+  m.rotation.x = Math.PI/2;
+  // Phillips cross
+  ['x','z'].forEach(axis => {
+    const cg = new THREE.BoxGeometry(
+      axis==='x' ? 0.001 : 0.004,
+      0.0005,
+      axis==='x' ? 0.004 : 0.001
+    );
+    const cm = new THREE.Mesh(cg, new THREE.MeshStandardMaterial({color:0x111111}));
+    cm.position.set(0, 0, 0.0016);
+    m.add(cm);
+  });
+  parent.add(m);
+}
+
+// ═══════════════════════════════════════════════════════
+// RACK GROUP (pivot for rotation)
+// ═══════════════════════════════════════════════════════
+const rack = new THREE.Group();
+scene.add(rack);
+
+// Center the rack vertically
+rack.position.y = 0;
+
+// ═══════════════════════════════════════════════════════
+// BUILD RACK SHELL
+// ═══════════════════════════════════════════════════════
+function buildShell() {
+  // Vertical front columns (left + right ears)
+  addBox(rack, MAT.ear, EAR_W, R_H, 0.012, -(R_W/2+EAR_W/2), 0, R_D/2-0.006);
+  addBox(rack, MAT.ear, EAR_W, R_H, 0.012,  (R_W/2+EAR_W/2), 0, R_D/2-0.006);
+  // Vertical back columns
+  addBox(rack, MAT.ear, EAR_W, R_H, 0.012, -(R_W/2+EAR_W/2), 0, -R_D/2+0.006);
+  addBox(rack, MAT.ear, EAR_W, R_H, 0.012,  (R_W/2+EAR_W/2), 0, -R_D/2+0.006);
+
+  // Side panels
+  addBox(rack, MAT.side, R_D, R_H, 0.003, -(TOT_W/2+0.0015), 0, 0, 0, Math.PI/2, 0);
+  addBox(rack, MAT.side, R_D, R_H, 0.003,  (TOT_W/2+0.0015), 0, 0, 0, Math.PI/2, 0);
+
+  // Top cap with slight chamfer effect
+  addBox(rack, MAT.top, TOT_W+0.003, 0.022, R_D, 0,  R_H/2+0.011, 0);
+  addBox(rack, MAT.top, TOT_W+0.003, 0.022, R_D, 0, -R_H/2-0.011, 0);
+
+  // Back panel
+  addBox(rack, MAT.back, R_W, R_H, 0.003, 0, 0, -R_D/2+0.0015);
+
+  // Header strip (top front)
+  const hdrMat = metalMat(0x1c1c1c, 0.65, 0.70);
+  addBox(rack, hdrMat, TOT_W, 0.038, 0.015, 0, R_H/2+0.008+0.019, R_D/2-0.0075);
+
+  // SPIE badge strip
+  const spieMat = metalMat(0x003060, 0.55, 0.40);
+  addBox(rack, spieMat, 0.055, 0.010, 0.002, TOT_W/2-0.035, R_H/2+0.008+0.019, R_D/2);
+
+  // Floor shadow plane
+  const floor = new THREE.Mesh(new THREE.PlaneGeometry(6,6), MAT.floor);
+  floor.rotation.x = -Math.PI/2;
+  floor.position.y = -R_H/2 - 0.022;
+  floor.receiveShadow = true;
+  scene.add(floor);
+
+  // Subtle reflection plane
+  const reflMat = new THREE.MeshStandardMaterial({ color:0x080808, roughness:0.95, metalness:0.05 });
+  const refl = new THREE.Mesh(new THREE.PlaneGeometry(6,6), reflMat);
+  refl.rotation.x = -Math.PI/2;
+  refl.position.y = -R_H/2 - 0.021;
+  scene.add(refl);
+}
+
+// ═══════════════════════════════════════════════════════
+// BUILD DEVICES (slots)
+// Each device gets a textured face plane + body box
+// ═══════════════════════════════════════════════════════
+const ledMeshes = []; // for animation
+
+function uToY(uStart, uCount) {
+  // uStart is 1-based from top
+  const topEdge = R_H / 2;
+  const slotTop = topEdge - (uStart - 1) * U_H;
+  const slotCenterY = slotTop - (uCount * U_H) / 2;
+  return slotCenterY;
+}
+
+function buildDevices() {
+  const occupiedU = new Set();
+  DEVICES.forEach(d => {
+    for (let i = d.u; i < d.u + d.h; i++) occupiedU.add(i);
+  });
+
+  // Empty slots
+  for (let u = 1; u <= RACK_UNITS; u++) {
+    if (occupiedU.has(u)) continue;
+    const y = uToY(u, 1);
+    const slotH = U_H - 0.0008;
+    // Empty faceplate
+    addBox(rack, MAT.empty, R_W, slotH, 0.004, 0, y, R_D/2-0.002);
+    // Hatched empty body
+    addBox(rack, metalMat(0x111111, 0.92, 0.05), R_W, slotH, R_D-0.016, 0, y, 0);
+    // Screws
+    const sz = R_D/2-0.001;
+    const sOff = 0.008;
+    addScrew(rack, -(R_W/2+EAR_W/2), y, sz);
+    addScrew(rack,  (R_W/2+EAR_W/2), y, sz);
+  }
+
+  // Active devices
+  DEVICES.forEach(dev => {
+    const y    = uToY(dev.u, dev.h);
+    const devH = dev.h * U_H - 0.001;
+    const faceZ = R_D/2 - 0.001;
+
+    // ── Face plane with real photo texture ──
+    const tex = loadTex('images/' + dev.img);
+    tex.minFilter = THREE.LinearFilter;
+    tex.magFilter = THREE.LinearFilter;
+    const faceMat = new THREE.MeshStandardMaterial({
+      map: tex,
+      roughness: 0.50,
+      metalness: 0.30,
+      envMapIntensity: 0.5,
+    });
+    const faceGeo = new THREE.PlaneGeometry(R_W, devH);
+    const faceMesh = new THREE.Mesh(faceGeo, faceMat);
+    faceMesh.position.set(0, y, faceZ + 0.0025);
+    faceMesh.receiveShadow = true;
+    faceMesh.castShadow = false;
+    faceMesh.userData.deviceName = dev.name;
+    rack.add(faceMesh);
+
+    // ── Body box (depth) ──
+    addBox(rack, metalMat(0x131313, 0.85, 0.25), R_W, devH, R_D - 0.015, 0, y, 0);
+
+    // ── Face bezel (thin frame around panel) ──
+    const bezMat = metalMat(0x0f0f0f, 0.70, 0.80);
+    // top/bottom rail of bezel
+    addBox(rack, bezMat, R_W + 0.001, 0.0008, 0.003, 0, y + devH/2, faceZ);
+    addBox(rack, bezMat, R_W + 0.001, 0.0008, 0.003, 0, y - devH/2, faceZ);
+
+    // ── Screws on ears ──
+    const sz = faceZ + 0.001;
+    const sx = R_W/2 + EAR_W/2;
+    addScrew(rack, -sx, y + devH/2 - 0.006, sz);
+    addScrew(rack,  sx, y + devH/2 - 0.006, sz);
+    if (dev.h >= 2) {
+      addScrew(rack, -sx, y - devH/2 + 0.006, sz);
+      addScrew(rack,  sx, y - devH/2 + 0.006, sz);
+    }
+
+    // ── LEDs ──
+    if (dev.leds && dev.leds.length > 0) {
+      dev.leds.forEach((colorHex, i) => {
+        const col = new THREE.Color(colorHex);
+        const ledGeo = new THREE.SphereGeometry(0.0028, 10, 10);
+        const ledMat = new THREE.MeshStandardMaterial({
+          color: col,
+          emissive: col,
+          emissiveIntensity: 1.0,
+          roughness: 0.15,
+          metalness: 0.0,
+        });
+        const ledMesh = new THREE.Mesh(ledGeo, ledMat);
+        ledMesh.position.set(
+          -R_W/2 + 0.018 + i * 0.011,
+          y,
+          faceZ + 0.004
+        );
+        rack.add(ledMesh);
+
+        // LED glow point light (subtle)
+        const ptLight = new THREE.PointLight(col, 0.15, 0.08);
+        ptLight.position.copy(ledMesh.position);
+        rack.add(ptLight);
+
+        ledMeshes.push({ mesh: ledMesh, light: ptLight, col, phase: Math.random() * Math.PI * 2 });
+      });
+    }
+  });
+
+  // ── U-number engravings (front column markings) ──
+  // These are thin lines etched into the ear columns
+  for (let u = 1; u <= RACK_UNITS; u++) {
+    const y = uToY(u, 1) + U_H/2;
+    const tickMat = metalMat(0x222222, 0.5, 0.6);
+    // Small tick on left ear
+    addBox(rack, tickMat, 0.004, 0.0005, 0.003, -(R_W/2+0.008), y, R_D/2-0.005);
+    addBox(rack, tickMat, 0.004, 0.0005, 0.003,  (R_W/2+0.008), y, R_D/2-0.005);
+  }
+}
+
+// ═══════════════════════════════════════════════════════
+// ENVIRONMENT MAP (fake IBL for reflections)
+// ═══════════════════════════════════════════════════════
+function buildEnvMap() {
+  const pmrem = new THREE.PMREMGenerator(renderer);
+  pmrem.compileEquirectangularShader();
+
+  // Simple gradient env
+  const envScene = new THREE.Scene();
+  envScene.background = new THREE.Color(0x111111);
+  const envTex = pmrem.fromScene(new THREE.RoomEnvironment(), 0.04).texture;
+  scene.environment = envTex;
+  pmrem.dispose();
+}
+
+// ═══════════════════════════════════════════════════════
+// CAMERA / ORBIT CONTROLS
+// ═══════════════════════════════════════════════════════
+let rotX = 0, rotY = 0, tX = 0, tY = 0;
+let camDist = 2.8, tDist = 2.8;
+let dragging = false, mx0 = 0, my0 = 0;
+let hudTimeout;
+
+// Auto-fit: compute distance so full rack fills ~85% of screen height
+function fitDistance() {
+  const fovRad = camera.fov * Math.PI / 180;
+  const dist = (R_H * 1.15) / (2 * Math.tan(fovRad / 2));
+  return dist;
+}
+
+function goView(v) {
+  document.querySelectorAll('.tbtn').forEach(b => b.classList.remove('active'));
+  document.getElementById('b' + v.charAt(0).toUpperCase() + v.slice(1))?.classList.add('active');
+
+  switch(v) {
+    case 'front': tX=0; tY=0; tDist=fitDistance(); break;
+    case 'left':  tX=0; tY=-Math.PI/2 + 0.1; tDist=fitDistance()*0.75; break;
+    case 'right': tX=0; tY= Math.PI/2 - 0.1; tDist=fitDistance()*0.75; break;
+    case 'back':  tX=0; tY= Math.PI;          tDist=fitDistance(); break;
+    case 'reset': tX=0.04; tY=0; tDist=fitDistance(); break;
+  }
+}
+
+// Mouse
+canvas.addEventListener('mousedown', e => { dragging=true; mx0=e.clientX; my0=e.clientY; showHud(); });
+window.addEventListener('mouseup',   () => { dragging=false; });
+window.addEventListener('mousemove', e => {
+  if (!dragging) return;
+  tY += (e.clientX - mx0) * 0.006;
+  tX += (e.clientY - my0) * 0.004;
+  tX = Math.max(-1.1, Math.min(1.1, tX));
+  mx0 = e.clientX; my0 = e.clientY;
+});
+
+// Touch
+canvas.addEventListener('touchstart', e => {
+  dragging=true; mx0=e.touches[0].clientX; my0=e.touches[0].clientY; showHud();
+}, {passive:true});
+window.addEventListener('touchend',   () => { dragging=false; });
+window.addEventListener('touchmove',  e => {
+  if (!dragging) return;
+  tY += (e.touches[0].clientX - mx0) * 0.006;
+  tX += (e.touches[0].clientY - my0) * 0.004;
+  tX = Math.max(-1.1, Math.min(1.1, tX));
+  mx0=e.touches[0].clientX; my0=e.touches[0].clientY;
+}, {passive:true});
+
+// Zoom
+canvas.addEventListener('wheel', e => {
+  e.preventDefault();
+  tDist *= e.deltaY > 0 ? 1.06 : 0.94;
+  tDist = Math.max(0.3, Math.min(8, tDist));
+  showHud();
+}, {passive:false});
+
+function showHud() {
+  document.getElementById('hud').style.opacity = '1';
+  clearTimeout(hudTimeout);
+  hudTimeout = setTimeout(() => {
+    document.getElementById('hud').style.opacity = '0';
+  }, 2500);
+}
+
+// ═══════════════════════════════════════════════════════
+// RAYCASTER for hover tooltip
+// ═══════════════════════════════════════════════════════
+const raycaster = new THREE.Raycaster();
+const mouse2d = new THREE.Vector2();
+const tooltip = document.getElementById('tooltip');
+let lastHover = null;
+
+canvas.addEventListener('mousemove', e => {
+  mouse2d.x = (e.clientX / W()) * 2 - 1;
+  mouse2d.y = -((e.clientY - 44) / H()) * 2 + 1;
+});
+
+function checkHover() {
+  raycaster.setFromCamera(mouse2d, camera);
+  const hits = raycaster.intersectObjects(rack.children, false);
+  const hit = hits.find(h => h.object.userData.deviceName);
+  if (hit) {
+    const name = hit.object.userData.deviceName;
+    if (name !== lastHover) {
+      tooltip.textContent = name;
+      tooltip.style.opacity = '1';
+      lastHover = name;
+    }
+  } else {
+    if (lastHover) {
+      tooltip.style.opacity = '0';
+      lastHover = null;
+    }
+  }
+}
+
+// ═══════════════════════════════════════════════════════
+// ANIMATE
+// ═══════════════════════════════════════════════════════
+function lerp(a,b,t) { return a+(b-a)*t; }
+
+let t0 = performance.now();
+
+function animate(ts) {
+  requestAnimationFrame(animate);
+  const elapsed = (ts - t0) / 1000;
+
+  // Smooth orbit
+  rotX = lerp(rotX, tX, 0.09);
+  rotY = lerp(rotY, tY, 0.09);
+  camDist = lerp(camDist, tDist, 0.10);
+
+  rack.rotation.x = rotX;
+  rack.rotation.y = rotY;
+  camera.position.set(0, 0, camDist);
+  camera.lookAt(0, 0, 0);
+
+  // LED pulse animation
+  ledMeshes.forEach(l => {
+    const intensity = 0.55 + 0.55 * Math.sin(elapsed * 2.2 + l.phase);
+    l.mesh.material.emissiveIntensity = intensity;
+    if (l.light) l.light.intensity = intensity * 0.12;
+  });
+
+  checkHover();
+  renderer.render(scene, camera);
+}
+
+// ═══════════════════════════════════════════════════════
+// INIT
+// ═══════════════════════════════════════════════════════
+function setProgress(pct) {
+  document.getElementById('loader-bar').style.width = pct + '%';
+  document.getElementById('loader-pct').textContent = pct + '%';
+}
+
+function init() {
+  setProgress(10);
+  buildShell();
+  setProgress(30);
+  buildDevices();
+  setProgress(60);
+  buildEnvMap();
+  setProgress(80);
+
+  // Set initial camera
+  const d = fitDistance();
+  camDist = d; tDist = d;
+  tX = 0.03; tY = 0;
+  camera.position.set(0, 0, d);
+  camera.lookAt(0, 0, 0);
+
+  // Preload all device textures
+  let loaded = 0;
+  const total = DEVICES.length;
+  DEVICES.forEach(dev => {
+    const tex = loadTex('images/' + dev.img);
+    tex.addEventListener?.('load', () => {
+      loaded++;
+      setProgress(80 + Math.round(loaded/total * 20));
+    });
+  });
+
+  setProgress(100);
+
+  setTimeout(() => {
+    document.getElementById('loader').style.display = 'none';
+    showHud();
+  }, 500);
+
+  animate(performance.now());
+}
+
+// Wait for Three.js to be ready
+if (typeof THREE === 'undefined') {
+  document.getElementById('loader-label').textContent = 'ERREUR · Three.js manquant';
+} else {
+  init();
+}
+</script>
+</body>
+</html>
