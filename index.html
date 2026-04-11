@@ -442,18 +442,37 @@ function buildDevices() {
 }
 
 // ═══════════════════════════════════════════════════════
-// ENVIRONMENT MAP (fake IBL for reflections)
+// ENVIRONMENT MAP — simple neutral env, no external deps
 // ═══════════════════════════════════════════════════════
 function buildEnvMap() {
-  const pmrem = new THREE.PMREMGenerator(renderer);
-  pmrem.compileEquirectangularShader();
+  // Generate a simple 2×1 equirect gradient texture as env map
+  // Dark studio-style: top slightly warm, bottom dark
+  const w = 64, h = 32;
+  const data = new Uint8Array(w * h * 3);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const t = y / h; // 0=top, 1=bottom
+      const r = Math.round(lerp(30, 10, t));
+      const g = Math.round(lerp(30, 10, t));
+      const b = Math.round(lerp(35, 12, t));
+      const i = (y * w + x) * 3;
+      data[i]=r; data[i+1]=g; data[i+2]=b;
+    }
+  }
+  const envTex = new THREE.DataTexture(data, w, h, THREE.RGBFormat);
+  envTex.encoding = THREE.sRGBEncoding;
+  envTex.needsUpdate = true;
 
-  // Simple gradient env
-  const envScene = new THREE.Scene();
-  envScene.background = new THREE.Color(0x111111);
-  const envTex = pmrem.fromScene(new THREE.RoomEnvironment(), 0.04).texture;
-  scene.environment = envTex;
-  pmrem.dispose();
+  try {
+    const pmrem = new THREE.PMREMGenerator(renderer);
+    pmrem.compileEquirectangularShader();
+    scene.environment = pmrem.fromEquirectangular(envTex).texture;
+    pmrem.dispose();
+    envTex.dispose();
+  } catch(e) {
+    // Fallback: no env map, lights are enough
+    console.warn('EnvMap skipped:', e.message);
+  }
 }
 
 // ═══════════════════════════════════════════════════════
@@ -597,40 +616,73 @@ function setProgress(pct) {
 }
 
 function init() {
-  setProgress(10);
+  // Step 1 — build geometry
+  setProgress(20);
   buildShell();
-  setProgress(30);
+  setProgress(50);
   buildDevices();
-  setProgress(60);
-  buildEnvMap();
-  setProgress(80);
+  setProgress(75);
 
-  // Set initial camera
+  // Step 2 — camera
   const d = fitDistance();
   camDist = d; tDist = d;
   tX = 0.03; tY = 0;
   camera.position.set(0, 0, d);
   camera.lookAt(0, 0, 0);
 
-  // Preload all device textures
+  // Step 3 — start render loop immediately (textures stream in)
+  animate(performance.now());
+
+  // Step 4 — env map async (won't block)
+  setTimeout(() => {
+    buildEnvMap();
+    setProgress(90);
+  }, 100);
+
+  // Step 5 — count texture loads, show scene as soon as geometry is ready
   let loaded = 0;
   const total = DEVICES.length;
+  function onTexLoad() {
+    loaded++;
+    const pct = 90 + Math.round((loaded / total) * 10);
+    setProgress(Math.min(100, pct));
+  }
+
   DEVICES.forEach(dev => {
-    const tex = loadTex('images/' + dev.img);
-    tex.addEventListener?.('load', () => {
-      loaded++;
-      setProgress(80 + Math.round(loaded/total * 20));
-    });
+    const t = loadTex('images/' + dev.img);
+    // THREE.Texture fires 'loadstart' / 'load' via its manager
+    // Use the loader manager instead
   });
 
-  setProgress(100);
+  // Use LoadingManager to track completion
+  texLoader.manager.onProgress = (url, loaded, total) => {
+    const pct = 90 + Math.round((loaded / total) * 10);
+    setProgress(Math.min(100, pct));
+  };
+  texLoader.manager.onLoad = () => {
+    setProgress(100);
+    setTimeout(() => {
+      document.getElementById('loader').style.display = 'none';
+      showHud();
+    }, 300);
+  };
+  texLoader.manager.onError = () => {
+    // Still hide loader even if some images are missing
+    setProgress(100);
+    setTimeout(() => {
+      document.getElementById('loader').style.display = 'none';
+      showHud();
+    }, 300);
+  };
 
+  // Trigger texture loads NOW (they'll fire manager events)
+  DEVICES.forEach(dev => loadTex('images/' + dev.img));
+
+  // Fallback: always hide loader after 3s no matter what
   setTimeout(() => {
     document.getElementById('loader').style.display = 'none';
     showHud();
-  }, 500);
-
-  animate(performance.now());
+  }, 3000);
 }
 
 // Wait for Three.js to be ready
